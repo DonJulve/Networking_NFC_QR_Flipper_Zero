@@ -45,5 +45,13 @@ cd "$FIRMWARE_DIR"
 
 # Copy artifact to local build dir
 echo "Copying artifact to local build directory..."
-cp "build/f7-firmware-D/.extapps/${APP_ID}.fap" "$APP_DIR/build/"
+# Detect build directory
+BUILD_TARGET=$(find build -maxdepth 1 -type d -name "f7-firmware-*" | head -n 1)
+
+if [ -z "$BUILD_TARGET" ]; then
+    echo "Error: Could not detect build target directory (e.g., f7-firmware-D or f7-firmware-C)"
+    exit 1
+fi
+
+cp "$BUILD_TARGET/.extapps/${APP_ID}.fap" "$APP_DIR/build/"
 echo "Done! App saved to $APP_DIR/build/${APP_ID}.fap"
