@@ -1,4 +1,5 @@
-[Read in English](README_en.md)
+[![en](https://img.shields.io/badge/lang-en-red.svg)](README_en.md)
+[![es](https://img.shields.io/badge/lang-es-blue.svg)](README.md)
 
 # Networking NFC + QR para Flipper Zero
 
