@@ -1,3 +1,6 @@
+[![en](https://img.shields.io/badge/lang-en-red.svg)](README_en.md)
+[![es](https://img.shields.io/badge/lang-es-blue.svg)](README.md)
+
 # Networking NFC + QR para Flipper Zero
 
 Esta aplicación para Flipper Zero permite emular una tarjeta NFC y mostrar un código QR simultáneamente en la pantalla. Es ideal para situaciones de networking, permitiendo compartir tu contacto o información de dos formas distintas al mismo tiempo.
@@ -20,7 +23,7 @@ Esta aplicación para Flipper Zero permite emular una tarjeta NFC y mostrar un c
 
 ## Compilación e Instalación
 
-Hemos incluido un script automatizado para facilitar la compilación.
+Se ha incluido un script automatizado para facilitar la compilación.
 
 1.  Clona este repositorio.
 2.  Asegúrate de tener descargado el repositorio del firmware (oficial o CFW) en una carpeta cercana (por defecto busca en `../flipperzero-firmware`).
