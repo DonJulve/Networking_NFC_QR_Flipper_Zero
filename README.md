@@ -1,3 +1,5 @@
+[Read in English](README_en.md)
+
 # Networking NFC + QR para Flipper Zero
 
 Esta aplicación para Flipper Zero permite emular una tarjeta NFC y mostrar un código QR simultáneamente en la pantalla. Es ideal para situaciones de networking, permitiendo compartir tu contacto o información de dos formas distintas al mismo tiempo.
