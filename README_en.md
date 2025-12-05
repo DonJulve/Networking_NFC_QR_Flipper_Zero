@@ -22,7 +22,7 @@ This application for Flipper Zero allows emulating an NFC card and displaying a 
 
 ## Compilation and Installation
 
-We have included an automated script to facilitate compilation.
+I have included an automated script to facilitate compilation.
 
 1.  Clone this repository.
 2.  Ensure you have downloaded the firmware repository (official or CFW) in a nearby folder (by default it looks in `../flipperzero-firmware`).
