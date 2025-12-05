@@ -1,5 +1,6 @@
 #include "networking_nfc_qr_app.h"
 #include <furi.h>
+#include <furi_hal_nfc.h>
 #include <gui/gui.h>
 #include <notification/notification_messages.h>
 
@@ -119,6 +120,23 @@ static bool emulate_view_input_callback(InputEvent* event, void* context) {
 
 
 
+
+// Helper to check if protocol has a listener
+static bool is_protocol_supported(NfcProtocol protocol) {
+    switch(protocol) {
+        case NfcProtocolIso14443_3a:
+        case NfcProtocolIso14443_4a:
+        case NfcProtocolIso15693_3:
+        case NfcProtocolFelica:
+        case NfcProtocolMfUltralight:
+        case NfcProtocolMfClassic:
+        case NfcProtocolSlix:
+            return true;
+        default:
+            return false;
+    }
+}
+
 // Custom Event Callback
 static bool custom_event_callback(void* context, uint32_t event) {
     NfcQrApp* app = context;
@@ -153,6 +171,30 @@ static bool custom_event_callback(void* context, uint32_t event) {
                 FURI_LOG_E(TAG, "Invalid NFC file extension");
                 return true;
             }
+
+            // Check HAL Ready
+            if(furi_hal_nfc_is_hal_ready() != FuriHalNfcErrorNone) {
+                 DialogMessage* message = dialog_message_alloc();
+                 dialog_message_set_text(message, "NFC Hardware Busy\nTry again later", 64, 32, AlignCenter, AlignCenter);
+                 dialog_message_set_buttons(message, "OK", NULL, NULL);
+                 dialog_message_show(app->dialogs, message);
+                 dialog_message_free(message);
+                 return true;
+            }
+
+            // Alloc NFC Device
+            if (!app->nfc_device) {
+                app->nfc_device = nfc_device_alloc();
+                if (!app->nfc_device) {
+                    // Handle error
+                    return true;
+                }
+            }
+            
+            // Alloc NFC
+            if (!app->nfc) {
+                 app->nfc = nfc_alloc();
+            }
             
             // Switch to emulate view first
             app->current_view = NfcQrAppViewEmulate;
@@ -170,6 +212,8 @@ static bool custom_event_callback(void* context, uint32_t event) {
             return true;
         }
         
+
+
         case NfcQrCustomEventAllocNfc: {
             NfcProtocol protocol = nfc_device_get_protocol(app->nfc_device);
             
@@ -177,7 +221,22 @@ static bool custom_event_callback(void* context, uint32_t event) {
                  return true;
             }
             
-            const NfcDeviceData* data = nfc_device_get_data(app->nfc_device, protocol);
+            const NfcDeviceData* data = NULL;
+
+            // Try to use the native protocol if supported
+            if (is_protocol_supported(protocol)) {
+                data = nfc_device_get_data(app->nfc_device, protocol);
+            } 
+            // Fallback: Check for parent protocols if native is not supported (e.g. EMV -> ISO14443_4A)
+            else {
+                if (nfc_protocol_has_parent(protocol, NfcProtocolIso14443_4a)) {
+                    protocol = NfcProtocolIso14443_4a;
+                    data = nfc_device_get_data(app->nfc_device, protocol);
+                } else if (nfc_protocol_has_parent(protocol, NfcProtocolIso14443_3a)) {
+                    protocol = NfcProtocolIso14443_3a;
+                    data = nfc_device_get_data(app->nfc_device, protocol);
+                }
+            }
             
             if (data) {
                 if (app->nfc_listener) {
@@ -233,6 +292,14 @@ static bool custom_event_callback(void* context, uint32_t event) {
                 nfc_listener_free(app->nfc_listener);
                 app->nfc_listener = NULL;
             }
+            if (app->nfc) {
+                nfc_free(app->nfc);
+                app->nfc = NULL;
+            }
+            if (app->nfc_device) {
+                nfc_device_free(app->nfc_device);
+                app->nfc_device = NULL;
+            }
             app->current_view = NfcQrAppViewSubmenu;
             view_dispatcher_switch_to_view(app->view_dispatcher, NfcQrAppViewSubmenu);
             return true;
@@ -256,16 +323,22 @@ static bool navigation_event_callback(void* context) {
 // Main Entry
 int32_t networking_nfc_qr_app_entry(void* p) {
     UNUSED(p);
+    FURI_LOG_I(TAG, "App starting...");
+    
     NfcQrApp* app = malloc(sizeof(NfcQrApp));
     memset(app, 0, sizeof(NfcQrApp));
     
+    FURI_LOG_I(TAG, "App struct allocated");
+
     app->nfc_file_path = furi_string_alloc();
     app->qr_file_path = furi_string_alloc();
     
+    FURI_LOG_I(TAG, "Strings allocated");
+
     // GUI Setup
     app->view_dispatcher = view_dispatcher_alloc();
     app->gui = furi_record_open(RECORD_GUI);
-    view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
+    
     view_dispatcher_set_event_callback_context(app->view_dispatcher, app);
     view_dispatcher_set_custom_event_callback(app->view_dispatcher, custom_event_callback);
     view_dispatcher_set_navigation_event_callback(app->view_dispatcher, navigation_event_callback);
@@ -277,10 +350,12 @@ int32_t networking_nfc_qr_app_entry(void* p) {
     submenu_add_item(app->submenu, "Select NFC File", NfcQrCustomEventMenuSelectNfc, submenu_callback, app->view_dispatcher);
     submenu_add_item(app->submenu, "Start Emulation", NfcQrCustomEventMenuStart, submenu_callback, app->view_dispatcher);
     submenu_add_item(app->submenu, "Credits", NfcQrCustomEventMenuCredits, submenu_callback, app->view_dispatcher);
+    
     view_dispatcher_add_view(app->view_dispatcher, NfcQrAppViewSubmenu, submenu_get_view(app->submenu));
     
     // Widget Setup (Credits)
     app->widget = widget_alloc();
+    widget_add_text_scroll_element(app->widget, 0, 0, 128, 64, "made by: DonJulve\nGitHub: DonJulve\nLinkedIn: julve");
     view_dispatcher_add_view(app->view_dispatcher, NfcQrAppViewCredits, widget_get_view(app->widget));
     
     // Emulation View Setup
@@ -291,31 +366,9 @@ int32_t networking_nfc_qr_app_entry(void* p) {
     view_set_context(app->emulate_view, app);
     view_dispatcher_add_view(app->view_dispatcher, NfcQrAppViewEmulate, app->emulate_view);
     
-    // NFC Setup
-    app->nfc = nfc_alloc();
-    if (!app->nfc) {
-        FURI_LOG_E(TAG, "Failed to alloc NFC");
-        // Cleanup and exit
-        view_dispatcher_free(app->view_dispatcher);
-        furi_record_close(RECORD_GUI);
-        furi_string_free(app->nfc_file_path);
-        furi_string_free(app->qr_file_path);
-        free(app);
-        return 0;
-    }
-    
-    app->nfc_device = nfc_device_alloc();
-    if (!app->nfc_device) {
-        FURI_LOG_E(TAG, "Failed to alloc NFC Device");
-        nfc_free(app->nfc);
-        view_dispatcher_free(app->view_dispatcher);
-        furi_record_close(RECORD_GUI);
-        furi_string_free(app->nfc_file_path);
-        furi_string_free(app->qr_file_path);
-        free(app);
-        return 0;
-    }
-    
+    // Attach to GUI
+    view_dispatcher_attach_to_gui(app->view_dispatcher, app->gui, ViewDispatcherTypeFullscreen);
+
     // Set default paths
     furi_string_set(app->qr_file_path, "/ext/apps_data/qrcodes");
     furi_string_set(app->nfc_file_path, "/ext/nfc");
@@ -324,6 +377,9 @@ int32_t networking_nfc_qr_app_entry(void* p) {
     
     // Start with Submenu
     app->current_view = NfcQrAppViewSubmenu;
+    
+    // Enable queue before switching view
+    view_dispatcher_enable_queue(app->view_dispatcher);
     view_dispatcher_switch_to_view(app->view_dispatcher, NfcQrAppViewSubmenu);
     
     view_dispatcher_run(app->view_dispatcher);

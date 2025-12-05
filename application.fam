@@ -3,7 +3,7 @@ App(
     name="Networking NFC + QR",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="networking_nfc_qr_app_entry",
-    stack_size=4 * 1024,
+    stack_size=16 * 1024,
     fap_icon="icons/qrcode_10px.png",
     fap_category="NFC",
     fap_icon_assets="icons",
@@ -11,6 +11,5 @@ App(
         "gui",
         "dialogs",
         "storage",
-        "nfc",
     ],
 )
