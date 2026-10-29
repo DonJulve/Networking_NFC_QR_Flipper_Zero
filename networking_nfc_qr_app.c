@@ -319,6 +319,56 @@ static void widget_button_callback(GuiButtonType result, InputType type, void* c
     }
 }
 
+// Validator for file name
+static bool name_validator_callback(const char* text, FuriString* error, void* context) {
+    UNUSED(context);
+    if (!text || strlen(text) == 0) {
+        if (error) furi_string_set(error, "\n Empty name");
+        return false;
+    }
+    for (size_t i = 0; text[i] != '\0'; i++) {
+        char c = text[i];
+        if (c == '/' || c == '\\' || c == ':' || c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') {
+            if (error) furi_string_set(error, "\n Invalid chars");
+            return false;
+        }
+    }
+    return true;
+}
+
+// Validator for URL
+static bool url_validator_callback(const char* text, FuriString* error, void* context) {
+    UNUSED(context);
+    if(!text || strlen(text) == 0) {
+        if(error) furi_string_set(error, "\n Enter URL");
+        return false;
+    }
+
+    bool is_https = (strncmp(text, "https://", 8) == 0);
+    bool is_http = (strncmp(text, "http://", 7) == 0);
+
+    if(!is_http && !is_https) {
+        if(error) furi_string_set(error, "\nNeeds http(s)://");
+        return false;
+    }
+
+    const char* payload = is_https ? (text + 8) : (text + 7);
+    bool has_content = false;
+    for(size_t i = 0; payload[i] != '\0'; i++) {
+        if(payload[i] != ' ' && payload[i] != '\t') {
+            has_content = true;
+            break;
+        }
+    }
+
+    if(!has_content) {
+        if(error) furi_string_set(error, "\n Enter URL");
+        return false;
+    }
+
+    return true;
+}
+
 // Text Input Done Callback
 static void text_input_done_callback(void* context) {
     NfcQrApp* app = context;
@@ -349,9 +399,43 @@ static bool custom_event_callback(void* context, uint32_t event) {
         }
         case NfcQrCustomEventMenuCreate: {
             app->text_input_mode = NfcQrTextInputModeName;
-            strncpy(app->name_store, "MyCard", sizeof(app->name_store));
+
+            Storage* storage = furi_record_open(RECORD_STORAGE);
+            storage_simply_mkdir(storage, "/ext/apps_data");
+            storage_simply_mkdir(storage, "/ext/apps_data/qrcodes");
+            storage_simply_mkdir(storage, "/ext/nfc");
+
+            char base_name[32] = "MyCard";
+            FuriString* test_qr = furi_string_alloc();
+            FuriString* test_nfc = furi_string_alloc();
+
+            furi_string_printf(test_qr, "/ext/apps_data/qrcodes/%s.qrcode", base_name);
+            furi_string_printf(test_nfc, "/ext/nfc/%s.nfc", base_name);
+
+            if(storage_file_exists(storage, furi_string_get_cstr(test_qr)) ||
+               storage_file_exists(storage, furi_string_get_cstr(test_nfc))) {
+                uint32_t counter = 1;
+                while(true) {
+                    snprintf(app->name_store, sizeof(app->name_store), "%s_%lu", base_name, (unsigned long)counter);
+                    furi_string_printf(test_qr, "/ext/apps_data/qrcodes/%s.qrcode", app->name_store);
+                    furi_string_printf(test_nfc, "/ext/nfc/%s.nfc", app->name_store);
+                    if(!storage_file_exists(storage, furi_string_get_cstr(test_qr)) &&
+                       !storage_file_exists(storage, furi_string_get_cstr(test_nfc))) {
+                        break;
+                    }
+                    counter++;
+                }
+            } else {
+                strncpy(app->name_store, base_name, sizeof(app->name_store));
+            }
+
+            furi_string_free(test_qr);
+            furi_string_free(test_nfc);
+            furi_record_close(RECORD_STORAGE);
+
             text_input_reset(app->text_input);
             text_input_set_header_text(app->text_input, "File Name (without ext)");
+            text_input_set_validator(app->text_input, name_validator_callback, app);
             text_input_set_result_callback(
                 app->text_input,
                 text_input_done_callback,
@@ -366,17 +450,91 @@ static bool custom_event_callback(void* context, uint32_t event) {
         case NfcQrCustomEventNameDone: {
             // Strip .nfc or .qrcode extension if user explicitly typed it
             char* dot = strrchr(app->name_store, '.');
-            if (dot && (strcasecmp(dot, ".nfc") == 0 || strcasecmp(dot, ".qrcode") == 0)) {
+            if(dot && (strcasecmp(dot, ".nfc") == 0 || strcasecmp(dot, ".qrcode") == 0)) {
                 *dot = '\0';
             }
-            if (strlen(app->name_store) == 0) {
+            if(strlen(app->name_store) == 0) {
                 strncpy(app->name_store, "Card", sizeof(app->name_store));
             }
+
+            Storage* storage = furi_record_open(RECORD_STORAGE);
+            storage_simply_mkdir(storage, "/ext/apps_data");
+            storage_simply_mkdir(storage, "/ext/apps_data/qrcodes");
+            storage_simply_mkdir(storage, "/ext/nfc");
+
+            FuriString* qr_test = furi_string_alloc_printf("/ext/apps_data/qrcodes/%s.qrcode", app->name_store);
+            FuriString* nfc_test = furi_string_alloc_printf("/ext/nfc/%s.nfc", app->name_store);
+
+            bool qr_exists = storage_file_exists(storage, furi_string_get_cstr(qr_test));
+            bool nfc_exists = storage_file_exists(storage, furi_string_get_cstr(nfc_test));
+
+            if(qr_exists || nfc_exists) {
+                DialogMessage* msg = dialog_message_alloc();
+                dialog_message_set_header(msg, "File Conflict", 64, 3, AlignCenter, AlignTop);
+
+                char conflict_msg[64];
+                if(qr_exists && nfc_exists) {
+                    snprintf(conflict_msg, sizeof(conflict_msg), "Both QR & NFC exist.\nOverwrite or auto-name?");
+                } else if(qr_exists) {
+                    snprintf(conflict_msg, sizeof(conflict_msg), "QR file already exists.\nOverwrite or auto-name?");
+                } else {
+                    snprintf(conflict_msg, sizeof(conflict_msg), "NFC file already exists.\nOverwrite or auto-name?");
+                }
+                dialog_message_set_text(msg, conflict_msg, 64, 28, AlignCenter, AlignCenter);
+                dialog_message_set_buttons(msg, "Auto", NULL, "Overwrite");
+                DialogMessageButton res = dialog_message_show(app->dialogs, msg);
+                dialog_message_free(msg);
+
+                if(res == DialogMessageButtonRight) {
+                    // Overwrite: keep current name_store and proceed to URL
+                } else if(res == DialogMessageButtonLeft) {
+                    // Auto: find next available <name>_1, <name>_2, etc.
+                    char base[48];
+                    strncpy(base, app->name_store, sizeof(base) - 1);
+                    base[sizeof(base) - 1] = '\0';
+                    uint32_t counter = 1;
+                    while(true) {
+                        snprintf(app->name_store, sizeof(app->name_store), "%s_%lu", base, (unsigned long)counter);
+                        furi_string_printf(qr_test, "/ext/apps_data/qrcodes/%s.qrcode", app->name_store);
+                        furi_string_printf(nfc_test, "/ext/nfc/%s.nfc", app->name_store);
+                        if(!storage_file_exists(storage, furi_string_get_cstr(qr_test)) &&
+                           !storage_file_exists(storage, furi_string_get_cstr(nfc_test))) {
+                            break;
+                        }
+                        counter++;
+                    }
+                } else {
+                    // Back button / Cancel: let user edit the name or press Back to return to menu
+                    furi_string_free(qr_test);
+                    furi_string_free(nfc_test);
+                    furi_record_close(RECORD_STORAGE);
+
+                    app->text_input_mode = NfcQrTextInputModeName;
+                    text_input_reset(app->text_input);
+                    text_input_set_header_text(app->text_input, "File Name (without ext)");
+                    text_input_set_validator(app->text_input, name_validator_callback, app);
+                    text_input_set_result_callback(
+                        app->text_input,
+                        text_input_done_callback,
+                        app,
+                        app->name_store,
+                        sizeof(app->name_store),
+                        false);
+                    app->current_view = NfcQrAppViewTextInput;
+                    view_dispatcher_switch_to_view(app->view_dispatcher, NfcQrAppViewTextInput);
+                    return true;
+                }
+            }
+
+            furi_string_free(qr_test);
+            furi_string_free(nfc_test);
+            furi_record_close(RECORD_STORAGE);
 
             app->text_input_mode = NfcQrTextInputModeUrl;
             strncpy(app->text_store, "https://", sizeof(app->text_store));
             text_input_reset(app->text_input);
             text_input_set_header_text(app->text_input, "Enter URL");
+            text_input_set_validator(app->text_input, url_validator_callback, app);
             text_input_set_result_callback(
                 app->text_input,
                 text_input_done_callback,
@@ -389,16 +547,66 @@ static bool custom_event_callback(void* context, uint32_t event) {
             return true;
         }
         case NfcQrCustomEventUrlDone: {
-            if (strlen(app->text_store) == 0 || strcmp(app->text_store, "https://") == 0 ||
-                strcmp(app->text_store, "http://") == 0) {
-                widget_reset(app->widget);
-                widget_add_string_element(app->widget, 64, 8, AlignCenter, AlignTop, FontPrimary, "Error!");
-                widget_add_string_element(
-                    app->widget, 64, 25, AlignCenter, AlignTop, FontSecondary, "URL cannot be empty");
-                widget_add_button_element(app->widget, GuiButtonTypeCenter, "OK", widget_button_callback, app);
-                furi_timer_start(app->popup_timer, furi_ms_to_ticks(2500));
-                app->current_view = NfcQrAppViewWidget;
-                view_dispatcher_switch_to_view(app->view_dispatcher, NfcQrAppViewWidget);
+            bool is_https = (strncmp(app->text_store, "https://", 8) == 0);
+            bool is_http = (strncmp(app->text_store, "http://", 7) == 0);
+            const char* payload = is_https ? (app->text_store + 8) : (is_http ? (app->text_store + 7) : NULL);
+            bool has_content = false;
+            if(payload) {
+                for(size_t i = 0; payload[i] != '\0'; i++) {
+                    if(payload[i] != ' ' && payload[i] != '\t') {
+                        has_content = true;
+                        break;
+                    }
+                }
+            }
+
+            if(!is_http && !is_https) {
+                DialogMessage* msg = dialog_message_alloc();
+                dialog_message_set_header(msg, "Invalid URL", 64, 3, AlignCenter, AlignTop);
+                dialog_message_set_text(
+                    msg, "URL must start with\nhttp:// or https://", 64, 33, AlignCenter, AlignCenter);
+                dialog_message_set_buttons(msg, NULL, "OK", NULL);
+                dialog_message_show(app->dialogs, msg);
+                dialog_message_free(msg);
+
+                // Stay on URL input screen so the user doesn't have to restart
+                app->text_input_mode = NfcQrTextInputModeUrl;
+                text_input_reset(app->text_input);
+                text_input_set_header_text(app->text_input, "Enter URL");
+                text_input_set_validator(app->text_input, url_validator_callback, app);
+                text_input_set_result_callback(
+                    app->text_input,
+                    text_input_done_callback,
+                    app,
+                    app->text_store,
+                    sizeof(app->text_store),
+                    false);
+                app->current_view = NfcQrAppViewTextInput;
+                view_dispatcher_switch_to_view(app->view_dispatcher, NfcQrAppViewTextInput);
+                return true;
+            } else if(!has_content) {
+                DialogMessage* msg = dialog_message_alloc();
+                dialog_message_set_header(msg, "Invalid URL", 64, 3, AlignCenter, AlignTop);
+                dialog_message_set_text(
+                    msg, "URL cannot be empty!\nPlease enter a URL.", 64, 33, AlignCenter, AlignCenter);
+                dialog_message_set_buttons(msg, NULL, "OK", NULL);
+                dialog_message_show(app->dialogs, msg);
+                dialog_message_free(msg);
+
+                // Stay on URL input screen so the user doesn't have to restart
+                app->text_input_mode = NfcQrTextInputModeUrl;
+                text_input_reset(app->text_input);
+                text_input_set_header_text(app->text_input, "Enter URL");
+                text_input_set_validator(app->text_input, url_validator_callback, app);
+                text_input_set_result_callback(
+                    app->text_input,
+                    text_input_done_callback,
+                    app,
+                    app->text_store,
+                    sizeof(app->text_store),
+                    false);
+                app->current_view = NfcQrAppViewTextInput;
+                view_dispatcher_switch_to_view(app->view_dispatcher, NfcQrAppViewTextInput);
                 return true;
             }
 
